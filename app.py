@@ -25,9 +25,9 @@ if not API_KEY:
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 
-def yapay_zekaya_sor(sistem_mesaji, kullanici_mesaji):
-    """Modele bir istek gönderir ve cevabın metnini döndürür."""
-    cevap = client.chat.completions.create(
+def akis(sistem_mesaji, kullanici_mesaji):
+    """Cevabı parça parça (yazıldıkça) döndürür."""
+    stream = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": sistem_mesaji},
@@ -35,16 +35,24 @@ def yapay_zekaya_sor(sistem_mesaji, kullanici_mesaji):
         ],
         temperature=0.3,
         max_tokens=4096,
+        stream=True,
     )
-    secim = cevap.choices[0]
-    metin = secim.message.content
+    for parca in stream:
+        if not parca.choices:
+            continue
+        metin = parca.choices[0].delta.content
+        if metin:
+            yield metin
 
-    if not metin:
-        raise ValueError(
-            f"Model boş cevap döndürdü (sebep: {secim.finish_reason}). "
-            "Lütfen tekrar dene."
-        )
-    return metin
+
+def uret(baslik, sistem_mesaji, kullanici_mesaji):
+    """Başlığı yazar, cevabı ekrana akıtır ve tam metni döndürür."""
+    st.subheader(baslik)
+    with st.spinner("Model düşünüyor, biraz sürebilir..."):
+        sonuc = st.write_stream(akis(sistem_mesaji, kullanici_mesaji))
+    if not sonuc:
+        raise ValueError("Model boş cevap döndürdü. Lütfen tekrar dene.")
+    return sonuc
 
 
 # --- Arayüz ---
@@ -57,35 +65,34 @@ if st.button("Özet ve soru üret"):
         st.warning("Lütfen biraz daha uzun bir ders notu yapıştır.")
     else:
         try:
-            # 1) Özet
-            with st.spinner("Özet hazırlanıyor..."):
-                ozet = yapay_zekaya_sor(
-                    "Sen yardımcı bir ders asistanısın. Türkçe yanıt ver. "
-                    "Sadece verilen nottaki bilgileri kullan.",
-                    "Aşağıdaki ders notunu maddeler halinde, kısa ve anlaşılır "
-                    "şekilde özetle. Önemli kavramları kalın yaz.\n\n" + notlar,
-                )
+            ozet = uret(
+                "📝 Özet",
+                "Sen yardımcı bir ders asistanısın. Türkçe yanıt ver. "
+                "Sadece verilen nottaki bilgileri kullan.",
+                "Aşağıdaki ders notunu maddeler halinde, kısa ve anlaşılır "
+                "şekilde özetle. Önemli kavramları kalın yaz.\n\n" + notlar,
+            )
 
-            # 2) Test soruları
-            with st.spinner("Test soruları hazırlanıyor..."):
-                sorular = yapay_zekaya_sor(
-                    "Sen deneyimli bir öğretmensin. Türkçe yanıt ver. "
-                    "Sadece verilen nottaki bilgilerden soru hazırla.",
-                    f"Aşağıdaki ders notundan {soru_sayisi} adet çoktan seçmeli "
-                    "test sorusu hazırla. Her sorunun A, B, C, D şıkları olsun. "
-                    "Önce tüm soruları yaz. Sonra tek başına bir satıra "
-                    "---CEVAP ANAHTARI--- yaz ve altına her sorunun doğru "
-                    "cevabını kısa bir açıklamayla ver.\n\n" + notlar,
-                )
+            sorular = uret(
+                "❓ Test Soruları",
+                "Sen deneyimli bir öğretmensin. Türkçe yanıt ver. "
+                "Sadece verilen nottaki bilgilerden soru hazırla.",
+                f"Aşağıdaki ders notundan {soru_sayisi} adet çoktan seçmeli "
+                "test sorusu hazırla. Her sorunun A, B, C, D şıkları olsun. "
+                "Önce tüm soruları yaz. Sonra tek başına bir satıra "
+                "---CEVAP ANAHTARI--- yaz ve altına her sorunun doğru "
+                "cevabını kısa bir açıklamayla ver.\n\n" + notlar,
+            )
 
             st.session_state["ozet"] = ozet
             st.session_state["sorular"] = sorular
+            st.rerun()  # temiz ve düzenli görünüm için sayfayı yeniler
 
         except Exception as hata:
             st.error(f"Bir hata oluştu: {hata}")
 
-# --- Sonuçları göster ---
-if "ozet" in st.session_state:
+# --- Kayıtlı sonuçları göster ---
+elif "ozet" in st.session_state:
     st.subheader("📝 Özet")
     st.markdown(st.session_state["ozet"])
 

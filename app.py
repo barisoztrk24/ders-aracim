@@ -3,17 +3,21 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
+from pypdf import PdfReader
 
 # .env dosyasındaki anahtarı okur
 load_dotenv()
 API_KEY = os.getenv("NVIDIA_API_KEY")
 
 BASE_URL = "https://integrate.api.nvidia.com/v1"
-MODEL = "meta/muse-glimmer-30b"
+MODEL = "meta/muse-glimmer-30b"  # başka model kullanıyorsan adını buraya yaz
+
+# Çok uzun notlar yavaşlatır, bu yüzden bir üst sınır koyuyoruz
+MAX_KARAKTER = 20000
 
 st.set_page_config(page_title="Ders Notu Asistanı", page_icon="📚")
 st.title("📚 Ders Notu Asistanı")
-st.write("Ders notunu yapıştır, sana özet ve test soruları hazırlayayım.")
+st.write("PDF yükle ya da ders notunu yapıştır, sana özet ve test soruları hazırlayayım.")
 
 if not API_KEY:
     st.error(
@@ -23,6 +27,13 @@ if not API_KEY:
     st.stop()
 
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+
+
+def pdf_oku(dosya):
+    """PDF dosyasındaki yazıyı çıkarır."""
+    okuyucu = PdfReader(dosya)
+    sayfalar = [sayfa.extract_text() or "" for sayfa in okuyucu.pages]
+    return "\n".join(sayfalar).strip()
 
 
 def akis(sistem_mesaji, kullanici_mesaji):
@@ -56,14 +67,43 @@ def uret(baslik, sistem_mesaji, kullanici_mesaji):
 
 
 # --- Arayüz ---
-notlar = st.text_area("Ders notunu buraya yapıştır:", height=300)
+sekme_pdf, sekme_metin = st.tabs(["📄 PDF yükle", "✍️ Metin yapıştır"])
+
+pdf_metni = ""
+with sekme_pdf:
+    pdf_dosyasi = st.file_uploader("Ders notu PDF'ini seç", type="pdf")
+    if pdf_dosyasi is not None:
+        try:
+            pdf_metni = pdf_oku(pdf_dosyasi)
+            if pdf_metni:
+                st.success(f"PDF okundu ({len(pdf_metni)} karakter).")
+            else:
+                st.warning(
+                    "PDF'ten yazı çıkarılamadı. Taranmış (fotoğraf gibi) bir "
+                    "PDF olabilir, bu uygulama sadece yazı içeren PDF'leri okur."
+                )
+        except Exception as hata:
+            st.error(f"PDF okunamadı: {hata}")
+
+with sekme_metin:
+    yazilan_metin = st.text_area("Ders notunu buraya yapıştır:", height=300)
+
+# PDF yüklendiyse o kullanılır, yoksa yapıştırılan metin
+notlar = pdf_metni if pdf_metni else yazilan_metin
 
 soru_sayisi = st.slider("Kaç test sorusu olsun?", min_value=3, max_value=15, value=5)
 
 if st.button("Özet ve soru üret"):
     if len(notlar.strip()) < 50:
-        st.warning("Lütfen biraz daha uzun bir ders notu yapıştır.")
+        st.warning("Lütfen bir PDF yükle ya da biraz daha uzun bir not yapıştır.")
     else:
+        if len(notlar) > MAX_KARAKTER:
+            st.info(
+                f"Not çok uzun, hız için ilk {MAX_KARAKTER} karakteri kullanıyorum. "
+                "Daha fazlası için PDF'i bölümlere ayırıp tek tek dene."
+            )
+            notlar = notlar[:MAX_KARAKTER]
+
         try:
             ozet = uret(
                 "📝 Özet",
@@ -86,7 +126,7 @@ if st.button("Özet ve soru üret"):
 
             st.session_state["ozet"] = ozet
             st.session_state["sorular"] = sorular
-            st.rerun()  # temiz ve düzenli görünüm için sayfayı yeniler
+            st.rerun()
 
         except Exception as hata:
             st.error(f"Bir hata oluştu: {hata}")

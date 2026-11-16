@@ -34,9 +34,17 @@ def yapay_zekaya_sor(sistem_mesaji, kullanici_mesaji):
             {"role": "user", "content": kullanici_mesaji},
         ],
         temperature=0.3,
-        max_tokens=2048,
+        max_tokens=4096,
     )
-    return cevap.choices[0].message.content
+    secim = cevap.choices[0]
+    metin = secim.message.content
+
+    if not metin:
+        raise ValueError(
+            f"Model boş cevap döndürdü (sebep: {secim.finish_reason}). "
+            "Lütfen tekrar dene."
+        )
+    return metin
 
 
 # --- Arayüz ---

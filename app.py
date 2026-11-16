@@ -9,7 +9,7 @@ load_dotenv()
 API_KEY = os.getenv("NVIDIA_API_KEY")
 
 BASE_URL = "https://integrate.api.nvidia.com/v1"
-MODEL = "mistralai/mistral-large-4-1t-a52b"
+MODEL = "meta/muse-glimmer-30b"
 
 st.set_page_config(page_title="Ders Notu Asistanı", page_icon="📚")
 st.title("📚 Ders Notu Asistanı")

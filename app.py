@@ -13,20 +13,15 @@ load_dotenv()
 API_KEY = os.getenv("NVIDIA_API_KEY")
 BASE_URL = "https://integrate.api.nvidia.com/v1"
 
+# Kullanılan model (değiştirmek istersen sadece bu satırı düzenle)
+MODEL = "nvidia/nemotron-3.5-bolt-e4b"
+
 # Çok uzun notlar yavaşlatır, bu yüzden bir üst sınır koyuyoruz
 MAX_KARAKTER = 15000
 
-# Listede en başa gelecek modeller (listede varsa)
-TERCIH_EDILENLER = [
-    "nvidia/nemotron-3.5-lightning-30b-a3b",
-    "meta/muse-glimmer-30b",
-]
-
-# Sohbet için uygun olmayan modelleri listeden çıkarmak için
-CHAT_DISI = (
-    "embed", "rerank", "parse", "guard", "safety",
-    "reward", "clip", "riva", "tts", "asr", "diffusion",
-)
+SECENEK_OZET = "📝 Sadece özet"
+SECENEK_SORU = "❓ Sadece test soruları"
+SECENEK_IKISI = "📚 İkisi birden"
 
 # Çıktı dilleri: modele verilen talimat + PDF başlıkları
 DILLER = {
@@ -94,14 +89,6 @@ if not API_KEY:
     st.stop()
 
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY, timeout=180.0)
-@st.cache_data(ttl=3600, show_spinner=False)
-def modelleri_getir():
-    """NVIDIA'dan şu an kullanılabilen modellerin listesini alır."""
-    idler = [m.id for m in client.models.list()]
-    idler = [i for i in idler if not any(k in i.lower() for k in CHAT_DISI)]
-    oncelikli = [i for i in TERCIH_EDILENLER if i in idler]
-    digerleri = sorted(i for i in idler if i not in oncelikli)
-    return oncelikli + digerleri
 
 
 # ---------------- Yardımcı fonksiyonlar ----------------
@@ -128,7 +115,7 @@ def sor(model, sistem_mesaji, kullanici_mesaji):
     if not metin:
         raise ValueError(
             f"Model boş cevap döndürdü (sebep: {secim.finish_reason}). "
-            "Tekrar dene ya da başka bir model seç."
+            "Lütfen tekrar dene."
         )
     return metin.strip()
 
@@ -294,29 +281,9 @@ def pdf_olustur(baslik, bolumler):
 # ---------------- Yan menü (ayarlar) ----------------
 with st.sidebar:
     st.header("⚙️ Ayarlar")
-
-    try:
-        modeller = modelleri_getir()
-    except Exception:
-        modeller = []
-
-    if modeller:
-        model = st.selectbox(
-            "Yapay zekâ modeli (yazarak arayabilirsin)", modeller
-        )
-    else:
-        model = ""
-        st.warning("Model listesi alınamadı, model adını aşağıya yaz.")
-
-    elle_model = st.text_input(
-        "Model adını kendin yazmak istersen (isteğe bağlı)"
-    ).strip()
-    if elle_model:
-        model = elle_model
-
     dil_adi = st.selectbox("Çıktı dili", list(DILLER.keys()))
     ton_adi = st.selectbox("Anlatım tarzı", list(TONLAR.keys()))
-    soru_sayisi = st.slider("Test sorusu sayısı", 3, 15, 5)
+    st.caption(f"Model: {MODEL}")
 
 # ---------------- Ana ekran ----------------
 st.title("📚 Ders Notu Asistanı")
@@ -346,10 +313,23 @@ with sekme_metin:
 # PDF yüklendiyse o kullanılır, yoksa yapıştırılan metin
 notlar = pdf_metni if pdf_metni else yazilan_metin
 
-if st.button("Özet ve soru üret", type="primary"):
-    if not model:
-        st.warning("Lütfen soldaki menüden bir model seç ya da model adı yaz.")
-    elif len(notlar.strip()) < 50:
+st.subheader("Ne istiyorsun?")
+istek = st.radio(
+    "Ne üretilsin?",
+    [SECENEK_OZET, SECENEK_SORU, SECENEK_IKISI],
+    index=2,
+    horizontal=True,
+    label_visibility="collapsed",
+)
+ozet_ister = istek in (SECENEK_OZET, SECENEK_IKISI)
+soru_ister = istek in (SECENEK_SORU, SECENEK_IKISI)
+
+soru_sayisi = 5
+if soru_ister:
+    soru_sayisi = st.slider("Test sorusu sayısı", 3, 15, 5)
+
+if st.button("Hazırla", type="primary"):
+    if len(notlar.strip()) < 50:
         st.warning("Lütfen bir PDF yükle ya da biraz daha uzun bir not yapıştır.")
     else:
         if len(notlar) > MAX_KARAKTER:
@@ -364,29 +344,38 @@ if st.button("Özet ve soru üret", type="primary"):
         ozet_baslik, soru_baslik, cevap_baslik = dil["basliklar"]
 
         try:
-            with st.spinner(
-                "Özet ve sorular aynı anda hazırlanıyor, biraz sürebilir..."
-            ):
-                ozet_sistem, ozet_kullanici = ozet_istemi(ton, dil["talimat"], notlar)
-                soru_sistem, soru_kullanici = soru_istemi(
-                    ton, dil["talimat"], notlar, soru_sayisi
-                )
+            with st.spinner("Hazırlanıyor, biraz sürebilir..."):
+                isler = {}
                 with ThreadPoolExecutor(max_workers=2) as havuz:
-                    is_ozet = havuz.submit(sor, model, ozet_sistem, ozet_kullanici)
-                    is_soru = havuz.submit(sor, model, soru_sistem, soru_kullanici)
-                    ozet = is_ozet.result()
-                    sorular_ham = is_soru.result()
+                    if ozet_ister:
+                        isler["ozet"] = havuz.submit(
+                            sor, MODEL, *ozet_istemi(ton, dil["talimat"], notlar)
+                        )
+                    if soru_ister:
+                        isler["sorular"] = havuz.submit(
+                            sor,
+                            MODEL,
+                            *soru_istemi(ton, dil["talimat"], notlar, soru_sayisi),
+                        )
+                    ozet = isler["ozet"].result() if "ozet" in isler else None
+                    sorular_ham = (
+                        isler["sorular"].result() if "sorular" in isler else None
+                    )
 
-            sorular, cevaplar = sorulari_ayir(sorular_ham)
+            sorular = cevaplar = ""
+            if sorular_ham:
+                sorular, cevaplar = sorulari_ayir(sorular_ham)
 
             # PDF'leri hazırla (başarısız olursa sadece indirme butonu çıkmaz)
             ozet_pdf = sorular_pdf = None
             try:
-                ozet_pdf = pdf_olustur(ozet_baslik, [(None, ozet)])
-                bolumler = [(None, sorular)]
-                if cevaplar:
-                    bolumler.append((cevap_baslik, cevaplar))
-                sorular_pdf = pdf_olustur(soru_baslik, bolumler)
+                if ozet:
+                    ozet_pdf = pdf_olustur(ozet_baslik, [(None, ozet)])
+                if sorular:
+                    bolumler = [(None, sorular)]
+                    if cevaplar:
+                        bolumler.append((cevap_baslik, cevaplar))
+                    sorular_pdf = pdf_olustur(soru_baslik, bolumler)
             except Exception as hata:
                 st.warning(f"PDF hazırlanamadı: {hata}")
 
@@ -401,8 +390,8 @@ if st.button("Özet ve soru üret", type="primary"):
         except Exception as hata:
             if "410" in str(hata) or "404" in str(hata):
                 st.error(
-                    "Bu model artık kullanılamıyor ya da adı yanlış. "
-                    "Soldaki listeden başka bir model seç."
+                    "Model artık kullanılamıyor ya da adı değişmiş olabilir. "
+                    "app.py içindeki MODEL satırını güncelle."
                 )
             else:
                 st.error(f"Bir hata oluştu: {hata}")
@@ -410,35 +399,42 @@ if st.button("Özet ve soru üret", type="primary"):
 # ---------------- Sonuçları göster ----------------
 sonuc = st.session_state.get("sonuc")
 if sonuc:
-    st.subheader("📝 Özet")
-    goster(sonuc["ozet"])
+    if sonuc["ozet"]:
+        st.subheader("📝 Özet")
+        goster(sonuc["ozet"])
 
-    st.subheader("❓ Test Soruları")
-    goster(sonuc["sorular"])
+    if sonuc["sorular"]:
+        st.subheader("❓ Test Soruları")
+        goster(sonuc["sorular"])
 
-    if sonuc["cevaplar"]:
-        with st.expander("Cevap anahtarını göster"):
-            goster(sonuc["cevaplar"])
+        if sonuc["cevaplar"]:
+            with st.expander("Cevap anahtarını göster"):
+                goster(sonuc["cevaplar"])
 
-    st.divider()
-    st.subheader("📥 PDF olarak indir")
-    if sonuc["ozet_pdf"] and sonuc["sorular_pdf"]:
-        sol, sag = st.columns(2)
-        sol.download_button(
-            "📄 Özeti indir",
-            data=sonuc["ozet_pdf"],
-            file_name="ozet.pdf",
-            mime="application/pdf",
-        )
-        sag.download_button(
-            "📄 Soruları indir (cevap anahtarı son sayfada)",
-            data=sonuc["sorular_pdf"],
-            file_name="sorular.pdf",
-            mime="application/pdf",
-        )
-    else:
-        st.info(
-            "PDF için Türkçe karakterleri destekleyen bir yazı tipi bulunamadı. "
-            "Windows'ta Arial otomatik bulunur. Bulunamazsa DejaVuSans.ttf ve "
-            "DejaVuSans-Bold.ttf dosyalarını proje klasörüne koyabilirsin."
-        )
+    if sonuc["ozet"] or sonuc["sorular"]:
+        st.divider()
+        st.subheader("📥 PDF olarak indir")
+
+        if sonuc["ozet_pdf"] or sonuc["sorular_pdf"]:
+            sol, sag = st.columns(2)
+            if sonuc["ozet_pdf"]:
+                sol.download_button(
+                    "📄 Özeti indir",
+                    data=sonuc["ozet_pdf"],
+                    file_name="ozet.pdf",
+                    mime="application/pdf",
+                )
+            if sonuc["sorular_pdf"]:
+                sag.download_button(
+                    "📄 Soruları indir (cevap anahtarı son sayfada)",
+                    data=sonuc["sorular_pdf"],
+                    file_name="sorular.pdf",
+                    mime="application/pdf",
+                )
+        else:
+            st.info(
+                "PDF için Türkçe karakterleri destekleyen bir yazı tipi "
+                "bulunamadı. Windows'ta Arial otomatik bulunur. Bulunamazsa "
+                "DejaVuSans.ttf ve DejaVuSans-Bold.ttf dosyalarını proje "
+                "klasörüne koyabilirsin."
+            )
